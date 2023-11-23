@@ -1,40 +1,88 @@
-import altair as alt
-import numpy as np
-import pandas as pd
 import streamlit as st
+from openai import OpenAI
+import json
+import requests
+from dotenv import load_dotenv
+import os
 
-"""
-# Welcome to Streamlit!
+load_dotenv()
 
-Edit `/streamlit_app.py` to customize this app to your heart's desire :heart:.
-If you have any questions, checkout our [documentation](https://docs.streamlit.io) and [community
-forums](https://discuss.streamlit.io).
+# Usa os.environ para obtener el valor de la clave de API de OpenAI
+openai_api_key = os.environ.get('OPENAI_API_KEY')
+external_endpoint_url = os.environ.get('EXTERNAL_ENDPOINT_URL')
 
-In the meantime, below is an example of what you can do with just a few lines of code:
-"""
+# Configuración de OpenAI (asegúrate de tener configurada tu clave de API de OpenAI)
+client = OpenAI(api_key=openai_api_key)
 
-num_points = st.slider("Number of points in spiral", 1, 10000, 1100)
-num_turns = st.slider("Number of turns in spiral", 1, 300, 31)
+def get_data_from_endpoint(IdCentro, Fecha, Hora):
+    # Parámetros para la solicitud al endpoint externo
+    try:
+        response = requests.get(
+            external_endpoint_url,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            params={'IdCentro': IdCentro, 'Fecha': Fecha, 'Hora': Hora}
+        )
 
-indices = np.linspace(0, 1, num_points)
-theta = 2 * np.pi * num_turns * indices
-radius = indices
+        # Verificar si la solicitud fue exitosa
+        response.raise_for_status()
 
-x = radius * np.cos(theta)
-y = radius * np.sin(theta)
+        # Parsear la respuesta JSON u otro formato según lo que retorne el endpoint
+        result = response.json()  # Ajusta esto según el formato real de la respuesta
+        return result
+    except requests.exceptions.RequestException as e:
+        return f"Error: No se pudo obtener datos del endpoint. Detalles: {str(e)}"
 
-df = pd.DataFrame({
-    "x": x,
-    "y": y,
-    "idx": indices,
-    "rand": np.random.randn(num_points),
-})
+# Funciones disponibles para OpenAI
+available_functions = {
+    "get_data_from_endpoint": get_data_from_endpoint,
+}
 
-st.altair_chart(alt.Chart(df, height=700, width=700)
-    .mark_point(filled=True)
-    .encode(
-        x=alt.X("x", axis=None),
-        y=alt.Y("y", axis=None),
-        color=alt.Color("idx", legend=None, scale=alt.Scale()),
-        size=alt.Size("rand", legend=None, scale=alt.Scale(range=[1, 150])),
-    ))
+# Definición de funciones para OpenAI
+functions = [
+    {
+        "name": "get_data_from_endpoint",
+        "description": '''Debes considerar para la funcion get_data_from_endpoint(IdCentro, Fecha, Hora) 
+                       los siguientes parámetros: IdCentro, Fecha, Hora.
+                       Debes extraer el centro,  la fecha y hora de consulta.
+                       La fecha debes pasarla con el siguiente formato:
+                       por ejemplo si es 21 de noviembre 2023 debe ser 20231121
+                       La hora debes pasarla como entero
+                       por ejemplo 14:00 debes pasar el parametro como 14.
+                       El centro Chauques esta asociado con el IdCentro AQ008, 
+                       Teguel 3 con el IdCentro AQ010, Centro Chidguapi con el IdCentro AQ003,
+                       Centro Guar con el IdCentro AQ004, Detif con el IdCentro AQ011,
+                       Ensenada Queten con el IdCentro AQ005. Tienes que dar prioridad a los sensores''',
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "IdCentro": {"type": "string", "description": "IdCentro."},
+                "Fecha": {"type": "string", "description": "Date."},
+                "Hora": {"type": "string", "description": "Time."},
+            },
+            "required": ["IdCentro", "Fecha", "Hora"],
+        },
+    }
+]
+
+# Inicia la aplicación Streamlit
+st.title("Asistente de Centro de Salmones")
+
+# Solicitar información al usuario
+query = st.text_input("¿Qué información necesitas?")
+if query:
+    # Obtener respuesta de OpenAI
+    messages = [{"role": "user", "content": query}]
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        functions=functions,
+        function_call="auto",
+    )
+
+    # Ejecutar la función de OpenAI
+    function_name = response.choices[0].message.function_call.name
+    arguments = response.choices[0].message.function_call.arguments
+    function_response = get_data_from_endpoint(**json.loads(arguments))
+
+    # Presentar la respuesta de la función de OpenAI
+    st.json(function_response)
